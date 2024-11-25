@@ -9,27 +9,30 @@ def apply_projective_transform(image, H, output_size, visualize=False):
     """
     Apply a projective transformation to the image using a homography matrix H.
     """
-    H_inv = np.linalg.inv(H)
-    transformed_image = cv2.warpPerspective(image, H, output_size)
-
-    if visualize:
-        image_small = cv2.resize(image, (0, 0), None, 0.5, 0.5)
-        transformed_image_small = cv2.resize(transformed_image, (0, 0), None, 0.5, 0.5)
-        imstack = np.hstack([image_small, transformed_image_small])
-        cv2.imshow('Transformation Result', imstack)
-        cv2.waitKey(500)
-        cv2.destroyAllWindows()
+    H_inv = np.linalg.inv(H) 
+    
+    transformed_image = np.zeros((output_size[1], output_size[0], 3), dtype=image.dtype)
+    
+    for y in range(output_size[1]):
+        for x in range(output_size[0]):
+            
+            dest_coord = np.array([x, y, 1])
+            
+            source_coord = H_inv @ dest_coord
+            source_x, source_y = source_coord[:2] / source_coord[2]
+            
+            source_x = int(round(source_x))
+            source_y = int(round(source_y))
+            
+            if 0 <= source_x < image.shape[1] and 0 <= source_y < image.shape[0]:
+                transformed_image[y, x] = image[source_y, source_x]
 
     return transformed_image
-
 
 def compute_homography(points_src, points_dst):
     """
     Compute the homography matrix that maps points_src to points_dst.
     """
-    assert points_src.shape[0] == points_dst.shape[0], "Mismatch in source and destination points."
-    assert points_src.shape[0] >= 4, "At least 4 points are required."
-
     A = []
     for (x, y), (u, v) in zip(points_src, points_dst):
         A.extend([
@@ -109,10 +112,11 @@ def col_diff(a, b):
     return np.sum(np.square([0.3, 0.59, 0.11] * diff))
 
 
-def calibrate_camera(images, aruco_board, mapping):
+def calibrate_camera_board(images, aruco_board):
     """
-    Calibrate the camera using ArUco markers.
+    Calibrate the camera using ArUco boards.
     """
+    mapping = {29: 1, 28: 0, 23: 2, 18: 4, 24: 3, 19: 5}
     objpoints, imgpoints = [], []
 
     for image_path in images:
@@ -134,6 +138,29 @@ def calibrate_camera(images, aruco_board, mapping):
 
     return cv2.calibrateCamera(objpoints, imgpoints, (1280, 720), None, None)
 
+def calibrate_camera(images, aruco_marker):
+    """
+    Calibrate the camera using ArUco markers.
+    """
+    objpoints = []
+    imgpoints = []
+
+    for image_path in images:
+        image = cv2.imread(image_path)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        corners, ids, _ = detector.detectMarkers(gray)
+        
+        if ids is not None and len(ids) > 0:
+            for marker in corners:
+                points = marker.reshape(-1, 1, 2)
+                points = points.astype('float32')
+                imgpoints.append(points)
+                objpoints.append(aruco_marker)
+
+    return cv2.calibrateCamera(
+        objpoints, imgpoints, gray.shape[::-1], None, None
+    )
 
 def undistort_images(images, mtx, dist, output_folder):
     """
@@ -150,8 +177,83 @@ def undistort_images(images, mtx, dist, output_folder):
         img_name = os.path.basename(img_path)
         cv2.imwrite(os.path.join(output_folder, img_name), undistorted_img)
 
+def hand_stitch(): #We stithc together picture 5 and 6
+    img1_points = np.array([
+        [989,454], #left upper corner white
+        [1052,405], #left lower corner white
+        [1076,434], #right upper corner white
+        [1012,485], #right lower corner white
+        [486,264], #left upper corner purple
+        [514,250], #left lower corner purple
+        [534,280], #right upper corner purple
+        [507,295], #right lower corner purple
+    ])
 
-def stitch_images(start, end):
+    img2_points = np.array([
+        [1100,463], #left upper corner white
+        [1171,411], #left lower corner white
+        [1200,444], #right upper corner white
+        [1127,496], #right lower corner white
+        [587,272], #left upper corner purple
+        [609,257], #left lower corner purple
+        [630,287], #right upper corner purple
+        [605,301], #right lower corner purple
+    ])
+    img_1 = cv2.imread(f'stitching_undistorted/img6.png')
+    img_2 = cv2.imread(f'stitching_undistorted/img5.png')
+
+    H = compute_homography(img1_points, img2_points)
+    img = get_panorama(img_1, img_2, H)
+    cv2.imwrite(f'hand_stitched_56.png', img)
+
+def get_seam(img1_nr, img2_nr):
+    img_1 = cv2.imread(f'stitching_undistorted/img{img2_nr}.png')
+    img_2 = cv2.imread(f'stitching_undistorted/img{img1_nr}.png')
+
+    H = get_homography(img1_nr, img2_nr)
+    img_2 = get_panorama(img_1, img_2, H, False)
+
+    h, w, _ = img_1.shape
+
+    diffs = np.zeros((h, w))
+
+    for i in range(h):
+        for j in range(w):
+            if i == 0:
+                diffs[i, j] = col_diff(img_1[i, j], img_2[i, j])
+            elif j == 0:
+                diffs[i, j] = 1e10
+            elif img_2[i, j].max() == 0: #black spot
+                diffs[i, j] = 1e10
+            else:
+                col_difference = col_diff(img_1[i, j], img_2[i, j])
+                diffs[i, j] = np.min([diffs[i-1, j-1], diffs[i-1, j], diffs[i-1, j]])
+                diffs[i, j] += col_difference
+
+    joined_img = img_2.copy()
+
+    current_w = diffs[-1, :].argmin()
+    current_w
+
+    seam = np.array([h-1, current_w])
+
+    joined_img[h-1, :current_w, :] = img_1[h-1, :current_w, :] #left picture
+    joined_img[h-1, current_w, :] = [255, 255, 255] #seam
+
+    for i in range(h-2, -1, -1):
+        current_w += diffs[i, (current_w-1):(current_w+2)].argmin() - 1
+        seam = np.append(seam, [i, current_w])
+        joined_img[i, :current_w, :] = img_1[i, :current_w, :] #left picture
+        joined_img[i, current_w, :] = [255, 255, 255] #seam
+
+    seam = seam.reshape(-1, 2)
+
+
+    joined_img = crop_img(joined_img)
+    cv2.imwrite(f'best_seam_{img1_nr}{img2_nr}.png', joined_img)
+
+
+def create_panorama(start, end):
     """
     Create a panorama by stitching images sequentially.
     """
@@ -164,35 +266,62 @@ def stitch_images(start, end):
     return crop_img(img)
 
 
-# Main Workflow
 if __name__ == "__main__":
-    # Load calibration images
     calibration_images_path = os.path.join(os.getcwd(), "calibration", "img*.png")
     calibration_images = glob.glob(calibration_images_path)
 
-    # Define ArUco board for calibration
     marker_size, marker_gap = 168, 70
     step_size = marker_size + marker_gap
+    top_left = [0, 0, 0]
+
+    aruco_marker = [
+        [top_left[0], top_left[1] + marker_size, 0],
+        top_left,
+        [top_left[0] + marker_size, top_left[1], 0],         
+        [top_left[0] + marker_size, top_left[1] + marker_size, 0],   
+    ]
+
+    aruco_board = []
+    for x in range(3):
+        for y in range(2):    
+            top_left = [x * step_size, (y) * step_size, 0]
+            
+            corners_3d = [
+                [top_left[0], top_left[1] + marker_size, 0],
+                top_left,
+                [top_left[0] + marker_size, top_left[1], 0],    
+                [top_left[0] + marker_size, top_left[1] + marker_size, 0],             
+            ]
+            
+            aruco_board.extend(corners_3d)
+    aruco_board = np.array(aruco_board, dtype=np.float32)
 
     aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_APRILTAG_16h5)
     detector = aruco.ArucoDetector(aruco_dict, aruco.DetectorParameters())
-    mapping = {29: 1, 28: 0, 23: 2, 18: 4, 24: 3, 19: 5}
 
-    aruco_board = np.array([
-        [x * step_size, y * step_size, 0]
-        for x in range(3) for y in range(2)
-    ], dtype=np.float32)
+    #Task 1
+    _, mtx_board, dist_board, _, _ = calibrate_camera_board(calibration_images, aruco_board)
+    _, mtx, dist, _, _ = calibrate_camera(calibration_images, aruco_marker)
 
-    # Calibrate camera
-    _, mtx, dist, _, _ = calibrate_camera(calibration_images, aruco_board, mapping)
-
-    # Undistort images for stitching
     stitching_images_path = os.path.join(os.getcwd(), "stitching", "img*.png")
     stitching_images = glob.glob(stitching_images_path)
     undistort_images(stitching_images, mtx, dist, "stitching_undistorted")
 
-    # Create panoramas
-    panorama = stitch_images(4, 8)
-    cv2.imwrite("panorama.png", panorama)
+    #Task 2
+    # This function is defined above
 
-    print("Panorama stitching completed.")
+    #Task 3
+    print('Testint the compute_homography function.')
+    test_homography()
+    
+    #Task 4
+    hand_stitch()
+
+    #Task 5
+    get_seam(7, 8)
+    #Task 6
+    stitched = create_panorama(7, 8)
+    cv2.imwrite("stitched_image_78.png", stitched)
+    #Task 7
+    panorama = create_panorama(4, 8)
+    cv2.imwrite("panorama.png", panorama)
