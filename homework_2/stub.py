@@ -7,7 +7,6 @@ import random
 import numpy as np
 import mujoco
 from mujoco import viewer
-import math
 
 import numpy as np
 import cv2
@@ -77,7 +76,7 @@ def process_image(img):
 
     lower_red1 = np.array([0, 50, 50]) 
     upper_red1 = np.array([10, 255, 255]) 
-    lower_red2 = np.array([170, 50, 50]) 
+    lower_red2 = np.array([170, 240, 240]) 
     upper_red2 = np.array([180, 255, 255])
 
     mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
@@ -107,7 +106,7 @@ def task_1():
     # For car control, you can use only sim_step function
     img_center = img.shape[1] // 2  
 
-    for _ in range(1500):        
+    while True:       
         cx, cy, area, mask = process_image(img)
 
         if cx is not None:
@@ -126,57 +125,62 @@ def task_1():
     # /TODO
 
 # TODO: add addditional functions/classes for task 2 if needed
-THRESHOLD_PERCENTAGE = 10  # Percentage of the view covered by a wall to trigger a turn
-
 def calculate_wall_coverage(img):
     """Calculate the percentage of the image occupied by green or blue walls."""
-    img = img[:, (img.shape[1] // 2 - 5):(img.shape[1] // 2 + 5), :]
-    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+    emergency_points = img[-(img.shape[0]//4):-(img.shape[0]//4)+10, (img.shape[1]//2-100):(img.shape[1]//2+100), :].copy()
+    np.save('emergency_points', emergency_points)
+    turning_points = img[-(img.shape[0]//4)-10:-(img.shape[0]//4), (img.shape[1]//2-100):(img.shape[1]//2+100), :].copy()
+
+    hsv_emergency = cv2.cvtColor(emergency_points, cv2.COLOR_RGB2HSV)
+    hsv_turning = cv2.cvtColor(turning_points, cv2.COLOR_RGB2HSV)
 
     green_lower = np.array([50, 50, 50])
     green_upper = np.array([70, 255, 255])
-    blue_lower = np.array([110, 50, 50])
-    blue_upper = np.array([130, 255, 255])
+    blue_lower = np.array([120, 50, 50])
+    blue_upper = np.array([150, 255, 255])
+    
+    green_mask_emergency = cv2.inRange(hsv_emergency, green_lower, green_upper)
+    blue_mask_emergency = cv2.inRange(hsv_emergency, blue_lower, blue_upper)
 
-    green_mask = cv2.inRange(hsv, green_lower, green_upper)
-    blue_mask = cv2.inRange(hsv, blue_lower, blue_upper)
-    total_pixels = img.shape[0] * img.shape[1]
+    emergency_pixels = np.sum(green_mask_emergency > 0) + np.sum(blue_mask_emergency > 0)
+    
+    green_mask_turning = cv2.inRange(hsv_turning, green_lower, green_upper)
+    blue_mask_turning = cv2.inRange(hsv_turning, blue_lower, blue_upper)
 
+    left_pixels = np.sum(green_mask_turning[:, :green_mask_turning.shape[1] // 4] > 0) + np.sum(blue_mask_turning[:, :blue_mask_turning.shape[1] // 4] > 0)
+    right_pixels = np.sum(green_mask_turning[:, -green_mask_turning.shape[1] // 4:] > 0) + np.sum(blue_mask_turning[:, -blue_mask_turning.shape[1] // 4:] > 0)
+    turning_pixels = left_pixels + right_pixels
 
-    left_green_pixels = np.sum(green_mask[:, :green_mask.shape[1] // 2, :] > 0) / total_pixels * 100
-    right_green_pixels = np.sum(green_mask[:, green_mask.shape[1] // 2:, :] > 0) / total_pixels * 100
-    left_blue_pixels = np.sum(blue_mask[:, :blue_mask.shape[1] // 2, :] > 0) / total_pixels * 100
-    right_blue_pixels = np.sum(blue_mask[:, blue_mask.shape[1] // 2:, :] > 0) / total_pixels * 100
-
-    return left_green_pixels, right_green_pixels, left_blue_pixels, right_blue_pixels
+    return turning_pixels, emergency_pixels
 # /TODO
 
 def task_2():
+    time.sleep(10)
     speed = random.uniform(-0.3, 0.3)
     turn = random.uniform(-0.2, 0.2)
     controls = {"forward": speed, "turn": turn}
     img = sim_step(1000, view=True, **controls)
-
+    np.save('img_before', img)
     # TODO: Change the lines below.
     # For car control, you can use only sim_step function
+    counter = 0
     while True:
-        green_percentage, blue_percentage = calculate_wall_coverage(img)
-        # print(green_percentage, blue_percentage)
+        turning_pixels, emergency_pixels = calculate_wall_coverage(img)
 
-        if green_percentage > THRESHOLD_PERCENTAGE:
-            img = sim_step(3, view=True, forward=0.0, turn=0.1)  
-            print('Green wall!')
+        if emergency_pixels:
+            img = sim_step(30, view=True, forward=-0.5, turn=0.0)
+            counter = 0
 
-        elif blue_percentage > THRESHOLD_PERCENTAGE:
-            img = sim_step(3, view=True, forward=0.0, turn=0.1)  
-            print('Blue wall!')
-            
-        elif green_percentage + blue_percentage > THRESHOLD_PERCENTAGE * 1.5:
-            img = sim_step(3, view=True, forward=0.0, turn=0.1)  
-            print('Corner!')
-        
+        elif turning_pixels:
+            img = sim_step(50, view=True, forward=0.0, turn=0.3)
+            counter = 0
         else:
-            img = sim_step(3, view=True, forward=0.1, turn=0.0)
+            img = sim_step(50, view=True, forward=0.5, turn=0.0)
+            counter += 1
+
+        if counter == 30:
+            task_1()
+            break
     # /TODO
 
 
@@ -186,6 +190,7 @@ def ball_is_close() -> bool:
     ball_pos = data.body("target-ball").xpos
     car_pos = data.body("dash cam").xpos
     print(car_pos, ball_pos)
+    print('Distance to ball', np.linalg.norm(ball_pos - car_pos))
     return np.linalg.norm(ball_pos - car_pos) < 0.2
 
 
@@ -218,33 +223,133 @@ def get_dash_camera_intrinsics():
 
 
 # TODO: add addditional functions/classes for task 3 if needed
+def estimatePoseSingleMarkers(corners, marker_size, cameraMatrix, distCoeffs):
+    marker_points = np.array([[0, 0, 0],
+                              [0, marker_size, 0],
+                              [marker_size, marker_size, 0],
+                              [marker_size, 0, 0]], dtype=np.float32)
+    trash = []
+    rvecs = []
+    tvecs = []
+    for c in corners:
+        nada, R, t = cv2.solvePnP(marker_points, c, cameraMatrix, distCoeffs, False, cv2.SOLVEPNP_IPPE_SQUARE)
+        rvecs.append(R)
+        tvecs.append(t)
+        trash.append(nada)
+    return rvecs, tvecs, trash
+
+def find_relative_position(img):
+    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
+    detectorParams = cv2.aruco.DetectorParameters()
+    detectorParams.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_CONTOUR
+    detector = cv2.aruco.ArucoDetector(aruco_dict, detectorParams)
+    intrinsic_matrix, dist_coeffs = get_dash_camera_intrinsics()
+
+    corners, ids, _ = detector.detectMarkers(img)
+    
+    while ids is None:
+        img = sim_step(50, **{"dash cam rotate": -0.2})
+        corners, ids, _ = detector.detectMarkers(img)
+
+    rvecs, tvecs, _ = estimatePoseSingleMarkers(
+        corners, marker_size=0.05,
+        cameraMatrix=intrinsic_matrix,
+        distCoeffs=dist_coeffs
+    )
+    return rvecs, tvecs
+
+def teleport_to_ball(img):
+    rvecs, tvecs = find_relative_position(img)
+    rvec = rvecs[0]  
+    tvec = tvecs[0]
+    print('Tvec', tvec)
+    print('Car', data.body('car').xpos)
+
+    teleport_by(tvec[2], 0)
+    time.sleep(5)
+
+def locate_red_ball(img):
+        red_lower = np.array([100, 100, 100])
+        red_upper = np.array([150, 255, 255])
+
+        hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv_img, red_lower, red_upper)
+        contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+        while len(contours) == 0:
+            img = sim_step(50, **{"dash cam rotate": -0.2})
+            hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv_img, red_lower, red_upper)
+            contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+        largest_contour = max(contours, key=cv2.contourArea)
+        ball_center = cv2.minEnclosingCircle(largest_contour)[0]
+        red_area = cv2.countNonZero(mask)
+        return ball_center, red_area
+
+def get_the_ball(img):
+    print('Start')
+    np.save('img', img)
+    img = sim_step(1000, **{'lift':1})
+    ball_center, red_area = locate_red_ball(img)
+    middle_point = img.shape[1] // 2
+    print(ball_center)
+    print(img.shape)
+    while True:
+        if abs(ball_center[0] - middle_point) > 10:
+            print('Ball not centered', ball_center[0], middle_point)
+            turn = 0.1 * np.sign(middle_point - ball_center[0])
+            img = sim_step(5, **{'turn':turn})
+            ball_center, red_area = locate_red_ball(img)
+
+        elif red_area > 8500:
+            print('Ball too close', red_area)
+            img = sim_step(20, **{'forward':-0.1, 'turn':0})
+            ball_center, red_area = locate_red_ball(img)
+
+        elif red_area < 8000:
+            print('Ball too far', red_area)
+            img = sim_step(20, **{'forward':0.1, 'turn':0})
+            ball_center, red_area = locate_red_ball(img)
+        else:
+            break
+    
+    img = sim_step(1000, **{'lift':-1, 'forward':0, 'turn':0})
+    img = sim_step(1000, **{'trapdoor close/open':1})
+    img = sim_step(1000, **{'lift':1})
 # /TODO
 
 
 def task_3():
     start_x = random.uniform(-0.2, 0.2)
     start_y = random.uniform(0, 0.2)
+    start_x = -2
+    start_y = -0.3
     teleport_by(start_x, start_y)
 
     # TODO: Get to the ball
     #  - use the dash camera and ArUco markers to precisely locate the car
     #  - move the car to the ball using teleport_by function
+    img = sim_step(2000, **{"lift": 1})
+    # img = sim_step(1, **{"dash cam rotate": 0, "lift": 0})
+    np.save('img', img)
 
-    time.sleep(2)
-    x_dest = random.uniform(-0.2, 0.2)
-    y_dest = 1 + random.uniform(-0.2, 0.2)
+    teleport_to_ball(img)
 
-    teleport_by(x_dest, y_dest)
-    time.sleep(2)
 
+    x, y = data.body('car').xpos[:2]
+    img = sim_step(1, **{"dash cam rotate": 0})
+
+    teleport_by(1 - x - 0.1, 2 - y)
     # /TODO
-
     assert ball_is_close()
 
     # TODO: Grab the ball
     # - the car should be already close to the ball
     # - use the gripper to grab the ball
-    # - you can move the car as well if you need to
+    # - you can mo ve the car as well if you need to
+    img = sim_step(1, **{"dash cam rotate": 0})
+    get_the_ball(img)
     # /TODO
 
     assert ball_grab()
