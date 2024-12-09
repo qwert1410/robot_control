@@ -110,7 +110,7 @@ def task_1():
         cx, cy, area, mask = process_image(img)
 
         if cx is not None:
-            if area > 5000:  
+            if area > 6000:  
                 print("Stopping: Ball is close.")
                 break
             while abs(cx - img_center) > 20:
@@ -127,7 +127,7 @@ def task_1():
 # TODO: add addditional functions/classes for task 2 if needed
 def calculate_wall_coverage(img):
     """Calculate the percentage of the image occupied by green or blue walls."""
-    emergency_points = img[-(img.shape[0]//4):-(img.shape[0]//4)+10, (img.shape[1]//2-100):(img.shape[1]//2+100), :].copy()
+    emergency_points = img[-(img.shape[0]//4)+10:-(img.shape[0]//4)+20, (img.shape[1]//2-60):(img.shape[1]//2+60), :].copy()
     np.save('emergency_points', emergency_points)
     turning_points = img[-(img.shape[0]//4)-10:-(img.shape[0]//4), (img.shape[1]//2-100):(img.shape[1]//2+100), :].copy()
 
@@ -155,9 +155,9 @@ def calculate_wall_coverage(img):
 # /TODO
 
 def task_2():
-    time.sleep(10)
     speed = random.uniform(-0.3, 0.3)
     turn = random.uniform(-0.2, 0.2)
+    print('Starting params', speed, turn)
     controls = {"forward": speed, "turn": turn}
     img = sim_step(1000, view=True, **controls)
     np.save('img_before', img)
@@ -166,21 +166,22 @@ def task_2():
     counter = 0
     while True:
         turning_pixels, emergency_pixels = calculate_wall_coverage(img)
-
+        print(turning_pixels, emergency_pixels)
         if emergency_pixels:
-            img = sim_step(30, view=True, forward=-0.5, turn=0.0)
+            img = sim_step(20, view=True, forward=-0.3, turn=0.0)
             counter = 0
 
         elif turning_pixels:
-            img = sim_step(50, view=True, forward=0.0, turn=0.3)
+            img = sim_step(20, view=True, forward=0.0, turn=0.2)
             counter = 0
         else:
-            img = sim_step(50, view=True, forward=0.5, turn=0.0)
+            img = sim_step(20, view=True, forward=0.3, turn=0.0)
             counter += 1
 
-        if counter == 30:
+        if counter == 200:
             task_1()
             break
+        
     # /TODO
 
 
