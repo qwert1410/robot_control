@@ -225,25 +225,34 @@ def get_dash_camera_intrinsics():
 
 # TODO: add addditional functions/classes for task 3 if needed
 
-def estimatePoseSingleMarkers(corners, marker_size, cameraMatrix, distCoeffs):
-    marker_points = np.array([
-                                [-marker_size / 2, marker_size / 2, 0],
-                                [marker_size / 2, marker_size / 2, 0],
-                                [marker_size / 2, -marker_size / 2, 0],
-                                [-marker_size / 2, -marker_size / 2, 0],
-                            ], dtype=np.float32)
-    trash = []
-    rvecs = []
-    tvecs = []
-    for c in corners:
-        nada, R, t = cv2.solvePnP(marker_points, c, cameraMatrix, distCoeffs, False, cv2.SOLVEPNP_IPPE_SQUARE)
-        rvecs.append(R)
-        tvecs.append(t)
-        trash.append(nada)
-    return rvecs, tvecs, trash
-camera_position = 0
+def estimatePoseSingleMarkers(corners, ids, cameraMatrix, distCoeffs):
+    corners_by_marker_id = {
+        0: [
+            (-0.275, -0.280, 0.05),  # Back-Right-Bottom (Marker 0, Right face)
+            (-0.275, -0.280, 0.01),  # Front-Right-Bottom (Marker 0, Right face)
+            (-0.275, -0.320, 0.01),  # Front-Right-Top (Marker 0, Right face)
+            (-0.275, -0.320, 0.05)   # Back-Right-Top (Marker 0, Right face)
+        ],
+        1: [
+            (-0.32, -0.275, 0.01),  # Back-Left-Bottom (Marker 5, Back face)
+            (-0.28, -0.275, 0.01),  # Back-Right-Bottom (Marker 5, Back face)
+            (-0.28, -0.275, 0.05),  # Back-Right-Top (Marker 5, Back face)
+            (-0.32, -0.275, 0.05)   # Back-Left-Top (Marker 5, Back face)
+        ]
+    }
+    marker_points = []
+    marker_points.append(corners_by_marker_id[ids[0]])
+    marker_points.append(corners_by_marker_id[ids[1]])
+    marker_points = np.array(marker_points, dtype='float32')
+    marker_points = marker_points.reshape(-1, 3)
+    
+    corners = np.vstack(corners)
+    corners = corners.reshape(-1, 2)
+
+    _, rvecs, tvecs = cv2.solvePnP(marker_points, corners, cameraMatrix, distCoeffs)
+    return rvecs, tvecs
+
 def find_relative_position(img):
-    global camera_position
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
     detectorParams = cv2.aruco.DetectorParameters()
     detectorParams.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_CONTOUR
@@ -253,39 +262,42 @@ def find_relative_position(img):
     corners, ids, _ = detector.detectMarkers(img)
     
     while ids is None:
-        camera_position += 1
         img = sim_step(100, **{"dash cam rotate": -1})
         img = sim_step(1, **{"dash cam rotate": 0})
         corners, ids, _ = detector.detectMarkers(img)
 
-    rvecs, tvecs, _ = estimatePoseSingleMarkers(
-        corners, marker_size=0.1,
+    while len(ids.flatten()) < 2:
+        teleport_by(0., -0.1)
+        img = sim_step(1, **{"dash cam rotate": 0})
+        corners, ids, _ = detector.detectMarkers(img)
+
+        while ids is None:
+            img = sim_step(100, **{"dash cam rotate": -1})
+            img = sim_step(1, **{"dash cam rotate": 0})
+            corners, ids, _ = detector.detectMarkers(img)
+
+    ids = ids.flatten()
+
+    rvecs, tvecs = estimatePoseSingleMarkers(
+        corners, ids,
         cameraMatrix=intrinsic_matrix,
         distCoeffs=dist_coeffs
     )
-    return rvecs, tvecs
+    
+    R, _ = cv2.Rodrigues(rvecs)
+    camera_position = -np.dot(R.T, tvecs)
+    print("Distance by camera:\n", camera_position.flatten())
+    print('Real distance', data.body('target-box-1').xpos - data.body('dash cam').xpos)
+    return camera_position
 
-x_points = []
-y_points = []
-tr_points = []
-angle = []
 def teleport_to_ball(img):
-    global camera_position
-    rvecs, tvecs = find_relative_position(img)
-    rvec = rvecs[0]  
-    tvec = tvecs[0]
-    camera = data.body('dash cam').xpos
-    box = data.body('target-box-1').xpos
-    deg = (18 * camera_position) * np.pi / 180
-    rot_mat = np.array([
-        [np.cos(deg), 0, np.sin(deg)],
-        [0, 1, 0],
-        [-np.sin(deg), 0, np.cos(deg)]
-    ])
-    x_points.append(tvec)
-    tr_points.append(rvec)
-    y_points.append(box - camera)
-    angle.append(camera_position * 18)
+    camera_position = find_relative_position(img)
+
+    teleport_by(camera_position[0], camera_position[1])
+    print('Car', data.body('dash cam').xpos)
+    time.sleep(5)
+    return camera_position
+
 def locate_red_ball(img):
         red_lower = np.array([100, 100, 100])
         red_upper = np.array([150, 255, 255])
@@ -337,13 +349,9 @@ def get_the_ball(img):
     img = sim_step(1000, **{'lift':1})
 # /TODO
 
-
 def task_3():
-    global camera_position
     start_x = random.uniform(-0.2, 0.2)
     start_y = random.uniform(0, 0.2)
-    start_x = -1
-    start_y = -0.3
     img = sim_step(2000, **{"lift": 1})
     teleport_by(start_x, start_y)
     print(data.body('dash cam').xpos)
@@ -354,10 +362,6 @@ def task_3():
 
     teleport_to_ball(img)
 
-    np.save('x_points', x_points)
-    np.save('tr_points', tr_points)
-    np.save('y_points', y_points)
-    np.save('angle', angle)
     # /TODO
     assert ball_is_close()
 
