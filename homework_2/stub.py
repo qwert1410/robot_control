@@ -277,6 +277,7 @@ def find_relative_position(img):
             corners, ids, _ = detector.detectMarkers(img)
 
     ids = ids.flatten()
+    print('ids', ids)
 
     rvecs, tvecs = estimatePoseSingleMarkers(
         corners, ids,
@@ -293,8 +294,9 @@ def find_relative_position(img):
 def teleport_to_ball(img):
     camera_position = find_relative_position(img)
 
-    teleport_by(camera_position[0], camera_position[1])
-    print('Car', data.body('dash cam').xpos)
+    teleport_by(-camera_position[0], -camera_position[1])
+    print('Car pos', data.body('car').xpos)
+    teleport_by(1, 2) #-0.1, 0.15
     time.sleep(5)
     return camera_position
 
