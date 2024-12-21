@@ -15,7 +15,6 @@ from numpy.typing import NDArray
 
 TASK_ID = 3
 
-
 world_xml_path = f"car_{TASK_ID}.xml"
 model = mujoco.MjModel.from_xml_path(world_xml_path)
 renderer = mujoco.Renderer(model, height=480, width=640)
@@ -111,7 +110,6 @@ def task_1():
 
         if cx is not None:
             if area > 6000:  
-                print("Stopping: Ball is close.")
                 break
             while abs(cx - img_center) > 20:
                 turn_rate = -0.05 * (cx - img_center)
@@ -157,7 +155,6 @@ def calculate_wall_coverage(img):
 def task_2():
     speed = random.uniform(-0.3, 0.3)
     turn = random.uniform(-0.2, 0.2)
-    print('Starting params', speed, turn)
     controls = {"forward": speed, "turn": turn}
     img = sim_step(1000, view=True, **controls)
     np.save('img_before', img)
@@ -166,7 +163,6 @@ def task_2():
     counter = 0
     while True:
         turning_pixels, emergency_pixels = calculate_wall_coverage(img)
-        print(turning_pixels, emergency_pixels)
         if emergency_pixels:
             img = sim_step(20, view=True, forward=-0.3, turn=0.0)
             counter = 0
@@ -224,7 +220,7 @@ def get_dash_camera_intrinsics():
 
 
 # TODO: add addditional functions/classes for task 3 if needed
-
+camera_angle = 0
 def estimatePoseSingleMarkers(corners, ids, cameraMatrix, distCoeffs):
     corners_by_marker_id = {
         0: [
@@ -252,7 +248,8 @@ def estimatePoseSingleMarkers(corners, ids, cameraMatrix, distCoeffs):
     _, rvecs, tvecs = cv2.solvePnP(marker_points, corners, cameraMatrix, distCoeffs)
     return rvecs, tvecs
 
-def find_relative_position(img):
+def teleport_to_ball(img):
+    global camera_angle
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
     detectorParams = cv2.aruco.DetectorParameters()
     detectorParams.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_CONTOUR
@@ -262,22 +259,27 @@ def find_relative_position(img):
     corners, ids, _ = detector.detectMarkers(img)
     
     while ids is None:
-        img = sim_step(100, **{"dash cam rotate": -1})
+        img = sim_step(150, **{"dash cam rotate": -1})
         img = sim_step(1, **{"dash cam rotate": 0})
+        camera_angle += 1
         corners, ids, _ = detector.detectMarkers(img)
 
     while len(ids.flatten()) < 2:
-        teleport_by(0., -0.1)
+        if ids.flatten()[0] == 0:
+            teleport_by(0., 0.05)
+        else:
+            teleport_by(0.05, 0)
+            
         img = sim_step(1, **{"dash cam rotate": 0})
         corners, ids, _ = detector.detectMarkers(img)
 
         while ids is None:
-            img = sim_step(100, **{"dash cam rotate": -1})
+            img = sim_step(150, **{"dash cam rotate": -1})
             img = sim_step(1, **{"dash cam rotate": 0})
+            camera_angle += 1
             corners, ids, _ = detector.detectMarkers(img)
 
     ids = ids.flatten()
-    print('ids', ids)
 
     rvecs, tvecs = estimatePoseSingleMarkers(
         corners, ids,
@@ -287,60 +289,54 @@ def find_relative_position(img):
     
     R, _ = cv2.Rodrigues(rvecs)
     camera_position = -np.dot(R.T, tvecs)
-    print("Distance by camera:\n", camera_position.flatten())
-    print('Real distance', data.body('target-box-1').xpos - data.body('dash cam').xpos)
-    return camera_position
 
-def teleport_to_ball(img):
-    camera_position = find_relative_position(img)
+    teleport_by(0.9 - camera_position[0], 1.9 - camera_position[1])
 
-    teleport_by(-camera_position[0], -camera_position[1])
-    print('Car pos', data.body('car').xpos)
-    teleport_by(1, 2) #-0.1, 0.15
-    time.sleep(5)
-    return camera_position
+def locate_red_ball(img):        
+    red_lower = np.array([100, 100, 100])
+    red_upper = np.array([150, 255, 255])
 
-def locate_red_ball(img):
-        red_lower = np.array([100, 100, 100])
-        red_upper = np.array([150, 255, 255])
+    hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv_img, red_lower, red_upper)
+    contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
+    while len(contours) == 0:
+        img = sim_step(50, **{"turn": -0.2})
+        img = sim_step(1, **{"turn": 0.0})
         hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv_img, red_lower, red_upper)
         contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-        while len(contours) == 0:
-            img = sim_step(50, **{"dash cam rotate": -0.2})
-            hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-            mask = cv2.inRange(hsv_img, red_lower, red_upper)
-            contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-
-        largest_contour = max(contours, key=cv2.contourArea)
-        ball_center = cv2.minEnclosingCircle(largest_contour)[0]
-        red_area = cv2.countNonZero(mask)
-        return ball_center, red_area
+    largest_contour = max(contours, key=cv2.contourArea)
+    ball_center = cv2.minEnclosingCircle(largest_contour)[0]
+    red_area = cv2.countNonZero(mask)
+    return ball_center, red_area
 
 def get_the_ball(img):
-    print('Start')
-    np.save('img', img)
+    global camera_angle
     img = sim_step(1000, **{'lift':1})
+
+    for _ in range(camera_angle):
+        img = sim_step(150, **{"dash cam rotate": 1})
+        img = sim_step(1, **{"dash cam rotate": 0})
+
     ball_center, red_area = locate_red_ball(img)
     middle_point = img.shape[1] // 2
-    print(ball_center)
-    print(img.shape)
+
+    img = sim_step(300, **{'forward':-0.5, 'turn':0})
+    img = sim_step(1, **{'forward':0.0, 'turn':0})
+
     while True:
         if abs(ball_center[0] - middle_point) > 10:
-            print('Ball not centered', ball_center[0], middle_point)
             turn = 0.1 * np.sign(middle_point - ball_center[0])
-            img = sim_step(5, **{'turn':turn})
+            img = sim_step(20, **{'turn':turn})
             ball_center, red_area = locate_red_ball(img)
 
         elif red_area > 8500:
-            print('Ball too close', red_area)
             img = sim_step(20, **{'forward':-0.1, 'turn':0})
             ball_center, red_area = locate_red_ball(img)
 
         elif red_area < 8000:
-            print('Ball too far', red_area)
             img = sim_step(20, **{'forward':0.1, 'turn':0})
             ball_center, red_area = locate_red_ball(img)
         else:
@@ -356,14 +352,13 @@ def task_3():
     start_y = random.uniform(0, 0.2)
     img = sim_step(2000, **{"lift": 1})
     teleport_by(start_x, start_y)
-    print(data.body('dash cam').xpos)
     # TODO: Get to the ball
     #  - use the dash camera and ArUco markers to precisely locate the car
     #  - move the car to the ball using teleport_by function
     # img = sim_step(1, **{"dash cam rotate": 0, "lift": 0})
 
     teleport_to_ball(img)
-
+    time.sleep(4)
     # /TODO
     assert ball_is_close()
 
